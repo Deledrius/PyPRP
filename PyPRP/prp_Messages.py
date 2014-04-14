@@ -41,9 +41,11 @@ import prp_Config, prp_HexDump, prp_GeomClasses
 # Message Type: 0x024F - plEnableMsg
 # Message Type: 0x024A - plTimerCallbackMsg
 # Message Type: 0x024B - plEventCallbackMsg
+# Message Type: 0x02E1 - plLinkToAgeMsg
+# Message Type: 0x02BF - plAgeLinkStruct
+# Message Type: 0x0343 - plAgeInfoStruct
 
 ## Still Needed at the moment:
-# Message Type: 0x02E1 - plLinkToAgeMsg
 # Message Type: 0x02FD - plResponderEnableMsg
 # Message Type: 0x03BA - plSubWorldMsg
 # Message Type: 0x045B - plSimSuppressMsg
@@ -84,6 +86,12 @@ class PrpMessage:
                 self.data = plTimerCallbackMsg(self)
             elif self.msgtype == 0x024B:
                 self.data = plEventCallbackMsg(self)
+            elif self.msgtype == 0x02E1:
+                self.data = plLinkToAgeMsg(self)
+            elif self.msgtype == 0x02BF:
+                self.data = plAgeLinkStruct(self)
+            elif self.msgtype == 0x0343:
+                self.data = plAgeInfoStruct(self)
             else:
                 raise ValueError, "Unsupported message type %04X %s" % (self.msgtype,MsgKeyToMsgName(self.msgtype))
         elif self.version == 6:
@@ -1136,7 +1144,242 @@ class plEventCallbackMsg(plMessage):
         self.fIndex = FindInDict(script, "index", self.fIndex)
         self.fRepeats = FindInDict(script, "repeats", self.fRepeats)
         self.fUser = FindInDict(script, "user", self.fUser)
-        
+
+class plLinkToAgeMsg(plMessage):
+    Flags = \
+    { \
+        "kMuteLinkOutSfx"  : 1 << 0, \
+        "kMuteLinkInSfx"   : 1 << 1, \
+    }
+
+    def __init__(self, parent=None, type=0x02E1):
+        plMessage.__init__(self, parent, type)
+        self.fBCastFlags |= plMessage.plBCastFlags["kLocalPropagate"]
+
+        self.fFlags = 0
+        self.fAgeLink = plAgeLinkStruct()
+        self.fLinkAnimation = "LinkOut"
+
+    def read(self, stream):
+        self.IMsgRead(stream)
+
+        self.fFlags = stream.ReadByte()
+        self.fAgeLink.read(stream)
+        self.fLinkAnimation = stream.ReadSafeString()
+
+    def write(self, stream):
+        self.IMsgWrite(stream)
+
+        stream.WriteByte(self.fFlags)
+        self.fAgeLink.write(stream)
+        stream.WriteSafeString(self.fLinkAnimation)
+
+    def export_script(self, script, refparser):
+        plMessage.export_script(self, script, refparser)
+
+        #self.fAgeLink = FindInDict(script, "agelink", self.fAgeLink)
+        #self.fLinkAnimation = FindInDict(script, "linkanim", self.fLinkAnimation)
+
+        self.fLinkAnimation = FindInDict(script, "linkanim", self.fLinkAnimation)
+
+        self.fAgeLink.fAgeInfo.fAgeFilename = FindInDict(script, "agename", self.fAgeLink.fAgeInfo.fAgeFilename)
+        self.fAgeLink.fAgeInfo.fAgeInstanceName = FindInDict(script, "instancename", self.fAgeLink.fAgeInfo.fAgeInstanceName)
+        self.fAgeLink.fAgeInfo.fFlags = self.fAgeLink.fAgeInfo.Flags["kHasAgeFilename"] | self.fAgeLink.fAgeInfo.Flags["kHasAgeInstanceName"]
+
+        self.fAgeLink.fLinkingRule = plAgeLinkStruct.LinkingRules[FindInDict(script, "linkingrule", self.fAgeLink.fLinkingRule)]
+        self.fAgeLink.fSpawnPoint.fSpawnPt = FindInDict(script, "spawnpoint", self.fAgeLink.fSpawnPoint.fSpawnPt)
+        self.fAgeLink.fSpawnPoint.fFlags = plSpawnPointInfo.Flags["kHasTitle"] | plSpawnPointInfo.Flags["kHasName"]
+        self.fAgeLink.fFlags = self.fAgeLink.Flags["kHasAgeInfo"] | self.fAgeLink.Flags["kHasLinkingRules"] | self.fAgeLink.Flags["kHasSpawnPt"]
+
+
+class plAgeLinkStruct(plMessage):
+    Flags = \
+    { \
+        "kHasAgeInfo"            : 1 << 0, \
+        "kHasLinkingRules"       : 1 << 1, \
+        "kHasSpawnPt_DEAD"       : 1 << 2, \
+        "kHasSpawnPt_DEAD2"      : 1 << 3, \
+        "kHasAmCCR"              : 1 << 4, \
+        "kHasSpawnPt"            : 1 << 5, \
+        "kHasParentAgeFilename"  : 1 << 6, \
+    }
+
+    # kBasicLink - Link to public age: Use PLS-MCP load balancing rules. Don't remember this link in KI/vault.
+    # kOriginalBook - Link and create a book in the AgesIOwn folder
+    # kSubAgeBook - Link to a sub age of current age.
+    # kOwnedBook - Link using info from my AgesIOwn folder
+    # kVisitBook - Link using info from my AgesICanVisit folder
+    # kChildAgeBook - Link to a child age of current age
+    LinkingRules = \
+    { \
+        "kBasicLink"         :  0, \
+        "kOriginalBook"      :  1, \
+        "kSubAgeBook"        :  2, \
+        "kOwnedBook"         :  3, \
+        "kVisitBook"         :  4, \
+        "kChildAgeBook"      :  5, \
+    }
+
+    def __init__(self, parent=None, type=0x02BF):
+        plMessage.__init__(self, parent, type)
+        self.fBCastFlags |= plMessage.plBCastFlags["kLocalPropagate"]
+
+        self.fFlags = 0
+        self.fAgeInfo = plAgeInfoStruct()
+        self.fLinkingRule = 0
+        self.fSpawnPoint = plSpawnPointInfo()
+        self.AmCCR = False
+        self.fParentAgeFileName = ""
+
+    def read(self, stream):
+        self.IMsgRead(stream)
+
+        self.fFlags = stream.ReadShort()
+        if self.fFlags & plAgeLinkStruct.Flags["kHasAgeInfo"]:
+            self.fAgeInfo.read(stream)
+        if self.fFlags & plAgeLinkStruct.Flags["kHasLinkingRules"]:
+            self.fLinkingRule = stream.ReadByte()
+        if self.fFlags & plAgeLinkStruct.Flags["kHasSpawnPt_DEAD"]:
+            stream.ReadSafeString()
+        if self.fFlags & plAgeLinkStruct.Flags["kHasSpawnPt_DEAD2"]:
+            stream.ReadSafeString()
+            stream.ReadSafeString()
+        if self.fFlags & plAgeLinkStruct.Flags["kHasSpawnPt"]:
+            self.fSpawnPoint.read(stream)
+        if self.fFlags & plAgeLinkStruct.Flags["kHasAmCCR"]:
+            self.AmCCR = stream.ReadByte()
+        if self.fFlags & plAgeLinkStruct.Flags["kHasParentAgeFilename"]:
+            self.fParentAgeFileName = stream.ReadSafeString()
+
+    def write(self, stream):
+        self.IMsgWrite(stream)
+
+        stream.WriteShort(self.fFlags)
+        if self.fFlags & plAgeLinkStruct.Flags["kHasAgeInfo"]:
+            self.fAgeInfo.write(stream)
+        if self.fFlags & plAgeLinkStruct.Flags["kHasLinkingRules"]:
+            stream.WriteByte(self.fLinkingRule)
+        if self.fFlags & plAgeLinkStruct.Flags["kHasSpawnPt"]:
+            self.fSpawnPoint.write(stream)
+        if self.fFlags & plAgeLinkStruct.Flags["kHasAmCCR"]:
+            stream.WriteByte(self.AmCCR)
+        if self.fFlags & plAgeLinkStruct.Flags["kHasParentAgeFilename"]:
+            stream.WriteSafeString(self.fParentAgeFileName)
+
+    def export_script(self, script, refparser):
+        plMessage.export_script(self, script, refparser)
+
+        #self.fAgeInfo = FindInDict(script, "ageinfo", self.fAgeInfo)
+        self.fLinkingRule = FindInDict(script, "linkingrule", self.fLinkingRule)
+        #self.fSpawnPoint = FindInDict(script, "spawnpoint", self.fSpawnPoint)
+        self.AmCCR = FindInDict(script, "ccr", self.AmCCR)
+        self.fParentAgeFileName = FindInDict(script, "parentagefilename", self.fParentAgeFileName)
+
+class plAgeInfoStruct(plMessage):
+    Flags = \
+    { \
+        "kHasAgeFilename"         : 1 << 0, \
+        "kHasAgeInstanceName"     : 1 << 1, \
+        "kHasAgeInstanceGuid"     : 1 << 2, \
+        "kHasAgeUserDefinedName"  : 1 << 3, \
+        "kHasAgeSequenceNumber"   : 1 << 4, \
+        "kHasAgeDescription"      : 1 << 5, \
+        "kHasAgeLanguage"         : 1 << 6, \
+    }
+
+    def __init__(self, parent=None, type=0x0343):
+        plMessage.__init__(self, parent, type)
+        self.fBCastFlags |= plMessage.plBCastFlags["kLocalPropagate"]
+
+        self.fFlags = 0
+        self.fAgeFilename = ""
+        self.fAgeInstanceName = ""
+        self.fAgeInstanceGUID = 0
+        self.fAgeUserDefinedName = ""
+        self.fAgeSequenceNumber = 0
+        self.fAgeDescription = ""
+        self.fAgeLanguage = -1
+
+    def read(self, stream):
+        self.IMsgRead(stream)
+
+        self.fFlags = stream.ReadByte()
+        if self.fFlags & plAgeInfoStruct.Flags["kHasAgeFilename"]:
+            self.fAgeFilename = stream.ReadSafeString()
+        if self.fFlags & plAgeInfoStruct.Flags["kHasAgeInstanceName"]:
+            self.fAgeInstanceName = stream.ReadSafeString()
+        if self.fFlags & plAgeInfoStruct.Flags["kHasAgeInstanceGuid"]:
+            self.fAgeInstanceGUID = stream.read(16)
+        if self.fFlags & plAgeInfoStruct.Flags["kHasAgeUserDefinedName"]:
+            self.fAgeUserDefinedName = stream.ReadSafeString()
+        if self.fFlags & plAgeInfoStruct.Flags["kHasAgeSequenceNumber"]:
+            self.fAgeSequenceNumber = stream.ReadInt()
+        if self.fFlags & plAgeInfoStruct.Flags["kHasAgeDescription"]:
+            self.fAgeDescription = stream.ReadSafeString()
+        if self.fFlags & plAgeInfoStruct.Flags["kHasAgeLanguage"]:
+            self.fAgeLanguage = stream.ReadInt()
+
+    def write(self, stream):
+        self.IMsgWrite(stream)
+
+        stream.WriteByte(self.fFlags)
+        if self.fFlags & plAgeInfoStruct.Flags["kHasAgeFilename"]:
+            stream.WriteSafeString(self.fAgeFilename)
+        if self.fFlags & plAgeInfoStruct.Flags["kHasAgeInstanceName"]:
+            stream.WriteSafeString(self.fAgeInstanceName)
+        if self.fFlags & plAgeInfoStruct.Flags["kHasAgeInstanceGuid"]:
+            stream.write(self.fAgeInstanceGUID)
+        if self.fFlags & plAgeInfoStruct.Flags["kHasAgeUserDefinedName"]:
+            stream.WriteSafeString(self.fAgeUserDefinedName)
+        if self.fFlags & plAgeInfoStruct.Flags["kHasAgeSequenceNumber"]:
+            stream.WriteInt(self.fAgeSequenceNumber)
+        if self.fFlags & plAgeInfoStruct.Flags["kHasAgeDescription"]:
+            stream.WriteSafeString(self.fAgeDescription)
+        if self.fFlags & plAgeInfoStruct.Flags["kHasAgeLanguage"]:
+            stream.WriteInt(self.fAgeLanguage)
+
+    def export_script(self, script, refparser):
+        plMessage.export_script(self, script, refparser)
+
+        self.fAgeFilename = FindInDict(script, "filename", self.fAgeFilename)
+        self.fAgeInstanceName = FindInDict(script, "instancename", self.fAgeInstanceName)
+        self.fAgeInstanceGUID = FindInDict(script, "guid", self.fAgeInstanceGUID)
+        self.fAgeUserDefinedName = FindInDict(script, "customname", self.fAgeUserDefinedName)
+        self.fAgeSequenceNumber = FindInDict(script, "sequencenum", self.fAgeSequenceNumber)
+        self.fAgeDescription = FindInDict(script, "desc", self.fAgeDescription)
+        self.fAgeLanguage = FindInDict(script, "language", self.fAgeLanguage)
+
+class plSpawnPointInfo:
+    Flags = \
+    { \
+        "kHasTitle"        : 1 << 0, \
+        "kHasName"         : 1 << 1, \
+        "kHasCameraStack"  : 1 << 2, \
+    }
+
+    def __init__(self):
+        self.fFlags = 0
+        self.fTitle = "Default"
+        self.fSpawnPt = "LinkInPointDefault"
+        self.fCameraStack = ""
+
+    def read(self, stream):
+        self.fFlags = stream.ReadByte()
+        if self.fFlags & plSpawnPointInfo.Flags["kHasTitle"]:
+            self.fTitle = stream.ReadSafeString()
+        if self.fFlags & plSpawnPointInfo.Flags["kHasName"]:
+            self.fSpawnPt = stream.ReadSafeString()
+        if self.fFlags & plSpawnPointInfo.Flags["kHasCameraStack"]:
+            self.fCameraStack = stream.ReadSafeString()
+
+    def write(self, stream):
+        stream.WriteByte(self.fFlags)
+        if self.fFlags & plSpawnPointInfo.Flags["kHasTitle"]:
+            stream.WriteSafeString(self.fTitle)
+        if self.fFlags & plSpawnPointInfo.Flags["kHasName"]:
+            stream.WriteSafeString(self.fSpawnPt)
+        if self.fFlags & plSpawnPointInfo.Flags["kHasCameraStack"]:
+            stream.WriteSafeString(self.fCameraStack)
 
 class plEnableMsg(plMessage):
     ModCmds = \

@@ -418,6 +418,10 @@ class AlcLogicHelper:
                         pscript = FindInDict(actscript,"ripplemgr",{})
                         plobj = plDynaRippleMgr.FindCreate(page, handle)
                         plobj.data.export_script(pscript)
+                    elif _type == "mstagebeh":
+                        pscript = FindInDict(actscript,"mstagebeh",{})
+                        plobj = plMultiStageBehMod.FindCreate(page, handle)
+                        plobj.data.export_script(pscript)
                     if not plobj is None:
                         if not hide:
                             scnobj.data.addModifier(plobj)
@@ -1392,7 +1396,7 @@ class plFacingConditionalObject(plConditionalObject):
 ##  Modifiers  ##
 ##             ##
 #################
-class plMultistageBehMod(plSingleModifier):
+class plMultiStageBehMod(plSingleModifier):
     def __init__(self,parent,name="unnamed",type=0x00C1):
         plSingleModifier.__init__(self,parent,name,type)
 
@@ -1402,6 +1406,13 @@ class plMultistageBehMod(plSingleModifier):
         self.fReverseFBControlsOnRelease = False #this+0x72
         self.fReceivers = hsTArray()
 
+    def _Find(page,name):
+        return page.find(0x00C1, name, 0)
+    Find = staticmethod(_Find)
+
+    def _FindCreate(page,name):
+        return page.find(0x00C1, name, 1)
+    FindCreate = staticmethod(_FindCreate)
 
     def read(self, s):
         plSingleModifier.read(self, s)
@@ -1417,7 +1428,6 @@ class plMultistageBehMod(plSingleModifier):
 
         self.fReceivers.ReadVector(s)
 
-
     def write(self, s):
         plSingleModifier.write(self, s)
 
@@ -1430,6 +1440,27 @@ class plMultistageBehMod(plSingleModifier):
             stage.write(s)
 
         self.fReceivers.WriteVector(s)
+
+    def export_script(self,script,scnobj=None):
+        print "   [MultistageBehMod %s]"%(str(self.Key.name))
+
+        self.fFreezePhys = bool(str(FindInDict(script, "freezephysics", self.fFreezePhys)).lower() == 'true')
+        self.fSmartSeek = bool(str(FindInDict(script, "smartseek", self.fSmartSeek)).lower() == 'true')
+        self.fReverseFBControlsOnRelease = bool(str(FindInDict(script, "reversecontrols", self.fReverseFBControlsOnRelease)).lower() == 'true')
+
+        stagelist = list(FindInDict(script, "stages", []))
+        for stagecript in stagelist:
+            if type(stagecript) == dict:
+                stage = plAnimStage()
+                stage.fAnimName = stagecript["anim"] if "anim" in stagecript else stage.fAnimName
+                self.fStages.append(stage)
+
+    def _Export(page,obj,scnobj,name):
+        mod = plMultiStageBehMod.FindCreate(page, name)
+        mod.data.export_obj(obj)
+        scnobj.data.addModifier(mod)
+
+    Export = staticmethod(_Export)
 
 class plSittingModifier(plSingleModifier):
     Flags = \
@@ -1730,8 +1761,8 @@ class plPythonParameter :
         "animation"             : {"typenum": 12, "type": "key",     "defaultkeytype": 0x006D,  "allowlist": [0x006D,0x00A8,] }, \
         "animationname"         : {"typenum": 13, "type": "str"}, \
 # Duplicate is to allow for english spelling:
-        "behaviour"             : {"typenum": 14, "type": "key",     "defaultkeytype": 0x0077,  "allowlist": [0x0077,] }, \
-        "behavior"              : {"typenum": 14, "type": "key",     "defaultkeytype": 0x0077,  "allowlist": [0x0077,] }, \
+        "behaviour"             : {"typenum": 14, "type": "key",     "defaultkeytype": 0x0077,  "allowlist": [0x0077,0x00C1] }, \
+        "behavior"              : {"typenum": 14, "type": "key",     "defaultkeytype": 0x0077,  "allowlist": [0x0077,0x00C1] }, \
         "material"              : {"typenum": 15, "type": "key",     "defaultkeytype": 0x0004, "allowlist": [0x0004,], "tag": "texture",  }, \
 #       "guipopupmenu"          : {"typenum": 16, "type": "key",     "defaultkeytype": None,   "allowlist": [0x0119,] }, \
 #       "guiskin"               : {"typenum": 17, "type": "key",     "defaultkeytype": None,   "allowlist": [0xFFFF,] }, \
@@ -2082,6 +2113,7 @@ class plResponderCmd:
         "animcmdmsg"        : 0x0206, \
         "timercallbackmsg"  : 0x024A, \
         "eventcallbackmsg"  : 0x024B, \
+        "linktoagemsg"      : 0x02E1, \
     }
 
     def __init__(self,parent):
